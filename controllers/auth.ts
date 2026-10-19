@@ -51,7 +51,12 @@ export const verifySignIn = handle(async (req, res) => {
   if (siwe.chainId !== env.siweChainId) throw new HttpError(401, "Wrong chain");
   try {
     await siwe.verify({ signature, domain: env.siweDomain });
-  } catch {
+  } catch (e){
+
+     console.error("SIWE verify failed:", e, {
+    expectedDomain: env.siweDomain,
+    messageDomain: siwe.domain,
+  });
     throw new HttpError(401, "Invalid signature");
   }
   const address = siwe.address.toLowerCase();
