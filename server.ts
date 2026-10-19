@@ -1,4 +1,5 @@
 import express from "express";
+import { httpServerHandler } from "cloudflare:node";
 import "dotenv/config";
 import cookieParser from "cookie-parser";
 import type { NextFunction, Request, Response } from "express";
@@ -49,3 +50,5 @@ app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
 app.listen(5000, () => {
     console.log("Server is running on port 5000");
 });
+
+export default httpServerHandler({ port: 5000 });
