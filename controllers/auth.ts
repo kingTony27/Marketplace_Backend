@@ -53,9 +53,10 @@ export const verifySignIn = handle(async (req, res) => {
     await siwe.verify({ signature, domain: env.siweDomain });
   } catch (e){
 
-     console.error("SIWE verify failed:", e, {
+    console.error("SIWE verify failed:", e, {
     expectedDomain: env.siweDomain,
     messageDomain: siwe.domain,
+    messageAddress: siwe.address,
   });
     throw new HttpError(401, "Invalid signature");
   }
