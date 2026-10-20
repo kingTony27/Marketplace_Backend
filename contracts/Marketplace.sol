@@ -36,7 +36,7 @@ contract Marketplace is IERC721Receiver, Ownable, Pausable, ReentrancyGuard {
     mapping(address => bool) public acceptedPaymentTokens; // ERC20 whitelist (native handled separately)
 
     //---- Events -------------
-    event Listed(uint256 indexed listingId, address indexed seller, uint256 tokenId, uint256 price, address paymentToken);
+    event Listed(uint256 indexed listingId, address indexed seller, uint256 tokenId, uint256 price, address paymentToken,  bool featured);
     event PriceUpdated(uint256 indexed listingId, uint256 newPrice);
     event FeeUpdated(uint256 newFeeBps);
     event FeeRecipientUpdated(address newRecipient);
@@ -101,7 +101,7 @@ contract Marketplace is IERC721Receiver, Ownable, Pausable, ReentrancyGuard {
     // Pulls NFT into escrow — reverts if seller hasn't approved this contract
       IERC721(nftContract).safeTransferFrom(msg.sender, address(this), tokenId);
 
-        emit Listed(listingId, msg.sender, tokenId, price, paymentToken);
+        emit Listed(listingId, msg.sender, tokenId, price, paymentToken, featured);
     }
 
     function updateListingPrice(uint256 listingId, uint256 newPrice) external {

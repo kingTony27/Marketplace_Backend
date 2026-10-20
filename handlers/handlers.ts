@@ -60,22 +60,31 @@ async function handleNFTCreated(args: Result, ctx: EventContext) {
 }
 
 async function handleListing(args: Result, ctx: EventContext) {
-  const [listingId, seller, tokenId, price, paymentToken] = args;
+  const [listingId, seller, tokenId, price, paymentToken, featured] = args;
   const nft_id = await getNftId(supabase, tokenId.toString());
 
-  // ignoreDuplicates: a replayed "Listed" must not reset a sold/cancelled listing back to active
-  const { error } = await supabase.from("listings").upsert(
-    {
-      listing_id: listingId.toString(),
-      nft_id,
-      seller_address: seller,
-      price: price.toString(),
-      payment_token: paymentToken,
-      status: "active",
-      listed_at: ctx.blockTime,
-    },
-    { onConflict: "listing_id", ignoreDuplicates: true }
-  );
+  const row = {
+    listing_id: listingId.toString(),
+    nft_id,
+    seller_address: seller,
+    price: price.toString(),
+    payment_token: paymentToken,
+    status: "active",
+    listed_at: ctx.blockTime,
+  };
+
+  // Featured: store in "featured" only, skip "listings"
+  if (featured) {
+    const { error } = await supabase
+      .from("featured")
+      .upsert(row, { onConflict: "listing_id", ignoreDuplicates: true });
+    check(error, `Listed (featured) ${listingId}`);
+    return;
+  }
+
+  const { error } = await supabase
+    .from("listings")
+    .upsert(row, { onConflict: "listing_id", ignoreDuplicates: true });
   check(error, `Listed ${listingId}`);
 }
 
