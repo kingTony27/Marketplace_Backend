@@ -1,4 +1,4 @@
-// Put this at: src/controllers/alchemyWebhook.ts  (adjust the import paths to your project)
+// src/controllers/alchemyWebhook.ts
 
 import type { Request, Response } from "express";
 import { ethers } from "ethers";
@@ -19,12 +19,20 @@ const interfaces = new Map<string, ethers.Interface>([
 export async function alchemyWebhook(req: Request, res: Response) {
   // 0. Our own setup problems, not the caller's fault
   if (!SIGNING_KEY) {
-    console.error("ALCHEMY_SIGNING_KEY is not set");
+    console.error("[webhook] ALCHEMY_SIGNING_KEY is not set");
     return res.status(500).json({ error: "Server misconfigured" });
+  }
+  if (!process.env.MARKETPLACE_CONTRACT_ADDRESS || !process.env.NFT_CONTRACT_ADDRESS) {
+    console.error("[webhook] contract address env missing", {
+      MARKETPLACE_CONTRACT_ADDRESS: Boolean(process.env.MARKETPLACE_CONTRACT_ADDRESS),
+      NFT_CONTRACT_ADDRESS: Boolean(process.env.NFT_CONTRACT_ADDRESS),
+    });
   }
   if (!Buffer.isBuffer(req.body)) {
     // express.json() ran before this route and already parsed the body
-    console.error("Raw body missing: mount this route BEFORE express.json()");
+    console.error("[webhook] Raw body missing: mount this route BEFORE express.json()", {
+      bodyType: typeof req.body,
+    });
     return res.status(500).json({ error: "Server misconfigured" });
   }
 
@@ -33,7 +41,18 @@ export async function alchemyWebhook(req: Request, res: Response) {
 
   // 2. Auth: is this really from Alchemy?
   const signature = req.header("x-alchemy-signature");
-  if (!signature || !isValidSignature(raw, signature, SIGNING_KEY)) {
+  if (!signature) {
+    console.error("[webhook] Rejected: x-alchemy-signature header missing");
+    return res.status(401).json({ error: "Invalid signature" });
+  }
+  let signatureOk = false;
+  try {
+    signatureOk = isValidSignature(raw, signature, SIGNING_KEY);
+  } catch (err) {
+    console.error("[webhook] Signature check threw:", err);
+  }
+  if (!signatureOk) {
+    console.error("[webhook] Rejected: signature does not match (check ALCHEMY_SIGNING_KEY)");
     return res.status(401).json({ error: "Invalid signature" });
   }
 
@@ -41,44 +60,84 @@ export async function alchemyWebhook(req: Request, res: Response) {
   let payload: any;
   try {
     payload = JSON.parse(raw);
-  } catch {
+  } catch (err) {
+    console.error("[webhook] Invalid JSON body:", err, { preview: raw.slice(0, 200) });
     return res.status(400).json({ error: "Invalid JSON" });
   }
 
   // 4. Find the block in the payload (the shape comes from YOUR GraphQL query)
   const block = payload?.event?.data?.block;
   if (!block) {
+    console.error("[webhook] Unexpected payload shape, no event.data.block", {
+      keys: Object.keys(payload ?? {}),
+      eventKeys: Object.keys(payload?.event ?? {}),
+    });
     return res.status(400).json({ error: "Unexpected payload" });
   }
   const logs: any[] = block.logs ?? [];
+  console.log(`[webhook] Received block ${block.number} with ${logs.length} log(s)`);
 
   try {
     const blockNumber = Number(block.number);
     const blockTime = new Date(Number(block.timestamp) * 1000).toISOString();
+    if (Number.isNaN(blockNumber) || blockTime === "Invalid Date") {
+      throw new Error(`Bad block fields: number=${block.number} timestamp=${block.timestamp}`);
+    }
 
     // 5. In order, one at a time. Listed must finish before ItemSold.
     const ordered = [...logs].sort((a, b) => Number(a.index) - Number(b.index));
 
     for (const log of ordered) {
-      const iface = interfaces.get(String(log.account?.address).toLowerCase());
-      if (!iface) continue; // not one of our contracts
+      const address = String(log.account?.address).toLowerCase();
+      const txHash = log.transaction?.hash;
+      const where = { txHash, logIndex: log.index, address };
 
-      const parsed = iface.parseLog({ topics: log.topics, data: log.data });
-      if (!parsed) continue; // event not in the ABI
+      const iface = interfaces.get(address);
+      if (!iface) {
+        console.warn("[webhook] Skipping log from unknown contract", where);
+        continue; // not one of our contracts
+      }
 
-      await handleEvent(parsed.name, parsed.args, {
-        txHash: log.transaction.hash,
-        logIndex: Number(log.index),
-        blockNumber,
-        blockTime,
-      });
+      let parsed: ethers.LogDescription | null;
+      try {
+        parsed = iface.parseLog({ topics: log.topics, data: log.data });
+      } catch (err) {
+        console.error("[webhook] parseLog threw", where, err);
+        continue;
+      }
+      if (!parsed) {
+        console.warn("[webhook] Skipping log, event not in ABI (stale ABI?)", {
+          ...where,
+          topic0: log.topics?.[0],
+        });
+        continue; // event not in the ABI
+      }
+
+      if (!txHash) {
+        throw new Error(`Log ${log.index} has no transaction hash`);
+      }
+
+      console.log("[webhook] Handling event:", parsed.name, where);
+      try {
+        await handleEvent(parsed.name, parsed.args, {
+          txHash,
+          logIndex: Number(log.index),
+          blockNumber,
+          blockTime,
+        });
+      } catch (err) {
+        // Add context, then rethrow so the outer catch returns 500 and Alchemy retries
+        const reason = err instanceof Error ? err.message : String(err);
+        throw new Error(`handleEvent(${parsed.name}) failed for tx ${txHash} log ${log.index}: ${reason}`);
+      }
     }
 
     // 6. Done
+    console.log(`[webhook] Block ${block.number} processed OK`);
     return res.status(200).json({ ok: true });
   } catch (err) {
     // 500 = "I failed", so Alchemy retries
-    console.error("Webhook processing failed:", err);
+    console.error("[webhook] Processing failed:", err);
     return res.status(500).json({ error: "Processing failed" });
   }
 }
