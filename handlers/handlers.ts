@@ -2,6 +2,8 @@ import type { Result } from "ethers";
 import "dotenv/config";
 import { supabase } from "../lib/client.js"
 import { getNftId } from "./nftIndex.js";
+import { JsonRpcProvider, Contract } from "ethers";
+
 
 // Info about the log, taken from the webhook payload (not from the event args)
 export type EventContext = {
@@ -10,6 +12,31 @@ export type EventContext = {
   blockNumber: number;
   blockTime: string; // ISO string, from the block timestamp
 };
+
+//ensure NFT is gotten even if unavialable on NFT table
+
+async function ensureNftId(tokenId: string, seller: string, ctx: EventContext) {
+  const existing = await getNftId(supabase, tokenId);
+  if (existing) return existing;
+
+  const provider = new JsonRpcProvider(process.env.RPC_URL);
+  const nft = new Contract(
+    process.env.NFT_CONTRACT_ADDRESS!,
+    ["function tokenURI(uint256) view returns (string)"],
+    provider
+  );
+  const uri = await nft.tokenURI(tokenId);
+
+  const { error } = await supabase.from("nfts").upsert(
+    { token_id: tokenId, owner_address: seller, token_uri: uri, created_at: ctx.blockTime },
+    { onConflict: "token_id", ignoreDuplicates: true }
+  );
+  check(error, `backfill NFT #${tokenId}`);
+
+  const id = await getNftId(supabase, tokenId);
+  if (!id) throw new Error(`NFT #${tokenId} still missing after backfill`);
+  return id;
+}
 
 // No retry loops here. If a write fails we THROW,
 // the route returns 500, and Alchemy retries the whole webhook.
@@ -61,7 +88,7 @@ async function handleNFTCreated(args: Result, ctx: EventContext) {
 
 async function handleListing(args: Result, ctx: EventContext) {
   const [listingId, seller, tokenId, price, paymentToken, featured] = args;
-  const nft_id = await getNftId(supabase, tokenId.toString());
+  const nft_id = await ensureNftId(tokenId.toString(), seller, ctx);
 
   const row = {
     listing_id: listingId.toString(),
@@ -111,7 +138,7 @@ async function handleItemCancelled(args: Result) {
 async function handleItemSold(args: Result, ctx: EventContext) {
   const [listingId, seller, buyer, nftContract, tokenId, price, fee, paymentToken] = args;
   console.log(listingId.toString())
-  const nft_id = await getNftId(supabase, tokenId.toString());
+  const nft_id = await ensureNftId(tokenId.toString(), seller, ctx);
 
   // Safe to run twice: unique on (tx_hash, log_index)
   const { error: saleError } = await supabase.from("sales").upsert(

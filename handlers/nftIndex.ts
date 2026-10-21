@@ -18,3 +18,4 @@ export async function getNftId(
   }
   return data.id;
 }
+
