@@ -17,6 +17,13 @@ const interfaces = new Map<string, ethers.Interface>([
 ]);
 
 export async function alchemyWebhook(req: Request, res: Response) {
+  
+  console.log("[webhook] HIT", {
+    isBuffer: Buffer.isBuffer(req.body),
+    hasSig: !!req.header("x-alchemy-signature"),
+    knownAddresses: [...interfaces.keys()],
+  });
+
   // 0. Our own setup problems, not the caller's fault
   if (!SIGNING_KEY) {
     console.error("[webhook] ALCHEMY_SIGNING_KEY is not set");
