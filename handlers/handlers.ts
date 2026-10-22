@@ -100,39 +100,39 @@ async function handleListing(args: Result, ctx: EventContext) {
     listed_at: ctx.blockTime,
   };
 
-  // Featured: store in "featured" only, skip "listings"
-  if (featured) {
-    const { error } = await supabase
-      .from("featured")
-      .upsert(row, { onConflict: "listing_id", ignoreDuplicates: true });
-    check(error, `Listed (featured) ${listingId}`);
-    return;
-  }
-
-  const { error } = await supabase
+  // Every listing goes in "listings"
+  const { error: listingError } = await supabase
     .from("listings")
     .upsert(row, { onConflict: "listing_id", ignoreDuplicates: true });
-  check(error, `Listed ${listingId}`);
+  check(listingError, `Listed ${listingId}`);
+
+  // Featured listings also go in "featured"
+  if (featured) {
+    const { error: featuredError } = await supabase
+      .from("featured")
+      .upsert(row, { onConflict: "listing_id", ignoreDuplicates: true });
+    check(featuredError, `Listed (featured) ${listingId}`);
+  }
+}
+
+
+// Apply the same update to listings and featured (a featured item lives in both)
+async function updateListing(listingId: unknown, changes: Record<string, unknown>, label: string) {
+  const id = Number(listingId);
+  const { error: e1 } = await supabase.from("listings").update(changes).eq("listing_id", id);
+  check(e1, label);
+  const { error: e2 } = await supabase.from("featured").update(changes).eq("listing_id", id);
+  check(e2, `${label} (featured)`);
 }
 
 async function handlePriceUpdated(args: Result) {
   const [listingId, newPrice] = args;
-
-  const { error } = await supabase
-    .from("listings")
-    .update({ price: newPrice.toString() })
-    .eq("listing_id", Number(listingId));
-  check(error, `PriceUpdated ${listingId}`);
+  await updateListing(listingId, { price: newPrice.toString() }, `PriceUpdated ${listingId}`); 
 }
 
 async function handleItemCancelled(args: Result) {
   const [listingId] = args; // args: listingId, seller
-
-  const { error } = await supabase
-    .from("listings")
-    .update({ status: "cancelled" })
-    .eq("listing_id", Number(listingId));
-  check(error, `ItemCancelled ${listingId}`);
+  await updateListing(listingId, { status: "cancelled" }, `ItemCancelled ${listingId}`);
 }
 
 async function handleItemSold(args: Result, ctx: EventContext) {
@@ -149,7 +149,7 @@ async function handleItemSold(args: Result, ctx: EventContext) {
       seller_address: seller,
       buyer_address: buyer,
       price: price.toString(),
-      fee: fee.toString(),
+      fee: fee.toString(), 
       payment_token: paymentToken,
       tx_hash: ctx.txHash,
       log_index: ctx.logIndex,
@@ -159,13 +159,8 @@ async function handleItemSold(args: Result, ctx: EventContext) {
     { onConflict: "tx_hash, log_index", ignoreDuplicates: true }
   )
   check(saleError, `ItemSold insert ${listingId}`);
-  console.error(JSON.stringify(saleError))
 
-  const { error: listingError } = await supabase
-    .from("listings")
-    .update({ status: "sold" })
-    .eq("listing_id", Number(listingId));
-  check(listingError, `ItemSold status ${listingId}`);
+  await updateListing(listingId, { status: "sold" }, `ItemSold status ${listingId}`);
 }
 
 // ---- Admin events (log only, not saved to DB) ----
