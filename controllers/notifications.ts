@@ -5,12 +5,10 @@ import { addressSchema, uuidSchema, limitSchema } from "../lib/validation.js";
 
 // Set by your auth middleware, e.g. req.user = { address: "0x..." }
 const getAddress = (req: Request): string => {
-  console.error("[notifications] req.user =", (req as any).user, "address =", (req as any).address, "locals =", (req as any).res?.locals);  
-  const raw = (req as Request & { user?: { address?: string } }).user?.address;
+  const raw = req.userAddress;
   if (!raw) throw new HttpError(401, "Unauthorized");
   return parse(addressSchema, raw); // validated + lowercased
 };
-
 // get notifications for the current user, with optional limit (default 20)
 export const getNotifications = handle(async (req, res) => {
   const address = getAddress(req);
